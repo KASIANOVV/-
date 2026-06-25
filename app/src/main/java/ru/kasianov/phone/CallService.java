@@ -1,7 +1,6 @@
 package ru.kasianov.phone;
 
 import android.content.Intent;
-import android.os.Build;
 import android.telecom.Call;
 import android.telecom.CallAudioState;
 import android.telecom.InCallService;
@@ -43,28 +42,9 @@ public class CallService extends InCallService {
         setMuted(muted);
     }
 
-    public void setSpeaker(boolean enabled) {
-        if (Build.VERSION.SDK_INT >= 34) {
-            requestCallEndpointChange(
-                    enabled ? findEndpoint(CallAudioState.ROUTE_SPEAKER) : findEndpoint(CallAudioState.ROUTE_EARPIECE),
-                    getMainExecutor(),
-                    outcome -> { }
-            );
-        } else {
-            setAudioRoute(enabled ? CallAudioState.ROUTE_SPEAKER : CallAudioState.ROUTE_EARPIECE);
-        }
-    }
-
     @SuppressWarnings("deprecation")
-    private android.telecom.CallEndpoint findEndpoint(int route) {
-        if (Build.VERSION.SDK_INT < 34) return null;
-        for (android.telecom.CallEndpoint endpoint : getAvailableCallEndpoints()) {
-            if ((route == CallAudioState.ROUTE_SPEAKER && endpoint.getEndpointType() == android.telecom.CallEndpoint.TYPE_SPEAKER)
-                    || (route == CallAudioState.ROUTE_EARPIECE && endpoint.getEndpointType() == android.telecom.CallEndpoint.TYPE_EARPIECE)) {
-                return endpoint;
-            }
-        }
-        return getCurrentCallEndpoint();
+    public void setSpeaker(boolean enabled) {
+        setAudioRoute(enabled ? CallAudioState.ROUTE_SPEAKER : CallAudioState.ROUTE_EARPIECE);
     }
 
     private void launchCallScreen() {
