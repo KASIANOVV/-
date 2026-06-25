@@ -36,13 +36,13 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p output
-          cp app/build/outputs/apk/debug/app-debug.apk output/KASYANOV_PHONE_v1.1.apk
-          sha256sum output/KASYANOV_PHONE_v1.1.apk > output/SHA256.txt
+          cp app/build/outputs/apk/debug/app-debug.apk output/KASYANOV_PHONE_SAFE_v1.2.apk
+          sha256sum output/KASYANOV_PHONE_SAFE_v1.2.apk > output/SHA256.txt
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: KASYANOV_PHONE_APK_V1_1
+          name: KASYANOV_PHONE_SAFE_V1_2
           path: output/*
           if-no-files-found: error
           retention-days: 30
