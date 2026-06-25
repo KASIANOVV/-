@@ -19,35 +19,34 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.Window;
-import android.view.WindowInsets;
 import android.view.WindowInsetsController;
-import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
-import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.Space;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 public class MainActivity extends Activity {
-    private static final int REQUEST_PHONE_PERMISSIONS = 100;
+    private static final int REQUEST_CALL_PERMISSION = 100;
     private static final int REQUEST_DIALER_ROLE = 101;
     private static final String PREFS = "dialer_prefs";
     private static final String RECENTS = "recent_numbers";
 
-    private EditText numberInput;
-    private LinearLayout recentContainer;
     private final int bg = Color.rgb(8, 10, 15);
     private final int panel = Color.rgb(22, 25, 34);
     private final int panelLight = Color.rgb(35, 39, 50);
     private final int accent = Color.rgb(118, 255, 169);
     private final int muted = Color.rgb(151, 158, 174);
+
+    private EditText numberInput;
+    private LinearLayout recentContainer;
+    private TextView roleStatus;
+    private String pendingNumber;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,8 +54,13 @@ public class MainActivity extends Activity {
         configureWindow();
         setContentView(buildUi());
         handleDialIntent(getIntent());
-        requestPhonePermissions();
-        requestDialerRole();
+        refreshRoleStatus();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshRoleStatus();
     }
 
     @Override
@@ -66,19 +70,43 @@ public class MainActivity extends Activity {
         handleDialIntent(intent);
     }
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_CALL_PERMISSION || pendingNumber == null) return;
+
+        String number = pendingNumber;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            continueCallFlow(number);
+        } else {
+            pendingNumber = null;
+            Toast.makeText(this, "Без разрешения Android не может начать звонок", Toast.LENGTH_LONG).show();
+            openSystemDialer(number);
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_DIALER_ROLE) return;
+
+        refreshRoleStatus();
+        if (pendingNumber != null) {
+            String number = pendingNumber;
+            pendingNumber = null;
+            executeCall(number);
+        }
+    }
+
     private void configureWindow() {
         Window window = getWindow();
         window.setStatusBarColor(bg);
         window.setNavigationBarColor(bg);
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController controller = window.getInsetsController();
-            if (controller != null) {
-                controller.setSystemBarsAppearance(0,
-                        WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS |
-                                WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
-            }
-        } else {
-            window.getDecorView().setSystemUiVisibility(0);
+            if (controller != null) controller.setSystemBarsAppearance(0,
+                    WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS |
+                            WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
         }
     }
 
@@ -86,31 +114,52 @@ public class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(bg);
 
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setClipToPadding(false);
+        root.addView(scroll, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT));
+
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(22), dp(22), dp(22), dp(22));
-        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT);
-        root.addView(content, contentParams);
+        content.setPadding(dp(22), dp(22), dp(22), dp(28));
+        scroll.addView(content, new ScrollView.LayoutParams(
+                ScrollView.LayoutParams.MATCH_PARENT,
+                ScrollView.LayoutParams.WRAP_CONTENT));
 
         TextView brand = text("KASYANOV", 13, accent, Typeface.BOLD);
         brand.setLetterSpacing(0.28f);
         content.addView(brand);
 
         TextView title = text("Телефон", 34, Color.WHITE, Typeface.BOLD);
-        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams titleParams = wrap();
         titleParams.topMargin = dp(3);
         content.addView(title, titleParams);
 
         TextView subtitle = text("Звонки через вашу SIM-карту", 14, muted, Typeface.NORMAL);
-        LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
+        LinearLayout.LayoutParams subtitleParams = wrap();
         subtitleParams.topMargin = dp(2);
         content.addView(subtitle, subtitleParams);
+
+        LinearLayout roleCard = new LinearLayout(this);
+        roleCard.setOrientation(LinearLayout.HORIZONTAL);
+        roleCard.setGravity(Gravity.CENTER_VERTICAL);
+        roleCard.setPadding(dp(15), 0, dp(15), 0);
+        roleCard.setBackground(rounded(panel, 18, 1, Color.rgb(46, 51, 65)));
+        roleCard.setClickable(true);
+        roleCard.setFocusable(true);
+        roleCard.setOnClickListener(v -> requestDialerRole(false));
+        LinearLayout.LayoutParams roleParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52));
+        roleParams.topMargin = dp(16);
+        content.addView(roleCard, roleParams);
+
+        roleStatus = text("Проверяем системный экран звонка…", 13, Color.WHITE, Typeface.BOLD);
+        roleCard.addView(roleStatus, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView roleArrow = text("›", 28, accent, Typeface.NORMAL);
+        roleCard.addView(roleArrow);
 
         LinearLayout inputCard = new LinearLayout(this);
         inputCard.setOrientation(LinearLayout.HORIZONTAL);
@@ -118,8 +167,8 @@ public class MainActivity extends Activity {
         inputCard.setPadding(dp(18), dp(5), dp(8), dp(5));
         inputCard.setBackground(rounded(panel, 24, 0, 0));
         LinearLayout.LayoutParams inputCardParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(74));
-        inputCardParams.topMargin = dp(24);
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(72));
+        inputCardParams.topMargin = dp(16);
         content.addView(inputCard, inputCardParams);
 
         numberInput = new EditText(this);
@@ -132,23 +181,13 @@ public class MainActivity extends Activity {
         numberInput.setInputType(InputType.TYPE_CLASS_PHONE);
         numberInput.setBackgroundColor(Color.TRANSPARENT);
         numberInput.setPadding(0, 0, 0, 0);
-        LinearLayout.LayoutParams numberParams = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.MATCH_PARENT, 1f);
-        inputCard.addView(numberInput, numberParams);
+        inputCard.addView(numberInput, new LinearLayout.LayoutParams(0,
+                LinearLayout.LayoutParams.MATCH_PARENT, 1f));
 
         TextView delete = text("⌫", 29, muted, Typeface.NORMAL);
         delete.setGravity(Gravity.CENTER);
-        delete.setBackground(rippleLike(panelLight, 19));
-        delete.setOnClickListener(v -> {
-            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            int start = numberInput.getSelectionStart();
-            int end = numberInput.getSelectionEnd();
-            if (start != end) {
-                numberInput.getText().delete(Math.min(start, end), Math.max(start, end));
-            } else if (start > 0) {
-                numberInput.getText().delete(start - 1, start);
-            }
-        });
+        delete.setBackground(rounded(panelLight, 19, 1, Color.rgb(45, 50, 63)));
+        delete.setOnClickListener(v -> deleteOneCharacter(v));
         delete.setOnLongClickListener(v -> {
             numberInput.setText("");
             return true;
@@ -157,25 +196,20 @@ public class MainActivity extends Activity {
 
         TextView recentTitle = text("НЕДАВНИЕ", 11, muted, Typeface.BOLD);
         recentTitle.setLetterSpacing(0.18f);
-        LinearLayout.LayoutParams recentTitleParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        recentTitleParams.topMargin = dp(18);
+        LinearLayout.LayoutParams recentTitleParams = wrap();
+        recentTitleParams.topMargin = dp(15);
         content.addView(recentTitle, recentTitleParams);
 
-        HorizontalScrollView scroll = new HorizontalScrollView(this);
-        scroll.setHorizontalScrollBarEnabled(false);
+        HorizontalScrollView recentScroll = new HorizontalScrollView(this);
+        recentScroll.setHorizontalScrollBarEnabled(false);
         recentContainer = new LinearLayout(this);
         recentContainer.setOrientation(LinearLayout.HORIZONTAL);
-        scroll.addView(recentContainer);
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(48));
-        scrollParams.topMargin = dp(8);
-        content.addView(scroll, scrollParams);
+        recentScroll.addView(recentContainer);
+        LinearLayout.LayoutParams recentParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(45));
+        recentParams.topMargin = dp(7);
+        content.addView(recentScroll, recentParams);
         renderRecents();
-
-        Space spacer = new Space(this);
-        content.addView(spacer, new LinearLayout.LayoutParams(1, 0, 1f));
 
         String[][] keys = {
                 {"1", ""}, {"2", "ABC"}, {"3", "DEF"},
@@ -191,11 +225,8 @@ public class MainActivity extends Activity {
             for (int col = 0; col < 3; col++) {
                 int index = row * 3 + col;
                 View key = createKey(keys[index][0], keys[index][1]);
-                LinearLayout.LayoutParams keyParams = new LinearLayout.LayoutParams(dp(78), dp(68));
-                keyParams.leftMargin = dp(10);
-                keyParams.rightMargin = dp(10);
-                keyParams.topMargin = dp(5);
-                keyParams.bottomMargin = dp(5);
+                LinearLayout.LayoutParams keyParams = new LinearLayout.LayoutParams(dp(78), dp(66));
+                keyParams.setMargins(dp(9), dp(4), dp(9), dp(4));
                 rowLayout.addView(key, keyParams);
             }
             content.addView(rowLayout);
@@ -206,12 +237,20 @@ public class MainActivity extends Activity {
         callButton.setBackground(rounded(accent, 36, 0, 0));
         callButton.setElevation(dp(10));
         callButton.setContentDescription("Позвонить");
-        callButton.setOnClickListener(v -> placeCall());
+        callButton.setOnClickListener(v -> startCallFlow());
         LinearLayout.LayoutParams callParams = new LinearLayout.LayoutParams(dp(76), dp(76));
         callParams.gravity = Gravity.CENTER_HORIZONTAL;
         callParams.topMargin = dp(10);
-        callParams.bottomMargin = dp(4);
         content.addView(callButton, callParams);
+
+        TextView hint = text("Первый запуск: разрешите звонки. Для фирменного экрана выберите приложение телефоном по умолчанию.",
+                11, muted, Typeface.NORMAL);
+        hint.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+        hintParams.topMargin = dp(12);
+        content.addView(hint, hintParams);
 
         return root;
     }
@@ -220,7 +259,7 @@ public class MainActivity extends Activity {
         LinearLayout key = new LinearLayout(this);
         key.setOrientation(LinearLayout.VERTICAL);
         key.setGravity(Gravity.CENTER);
-        key.setBackground(rippleLike(panel, 24));
+        key.setBackground(rounded(panel, 24, 1, Color.rgb(45, 50, 63)));
         key.setClickable(true);
         key.setFocusable(true);
 
@@ -250,57 +289,74 @@ public class MainActivity extends Activity {
         return key;
     }
 
-    private void placeCall() {
+    private void deleteOneCharacter(View source) {
+        source.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+        int start = numberInput.getSelectionStart();
+        int end = numberInput.getSelectionEnd();
+        if (start != end) {
+            numberInput.getText().delete(Math.min(start, end), Math.max(start, end));
+        } else if (start > 0) {
+            numberInput.getText().delete(start - 1, start);
+        }
+    }
+
+    private void startCallFlow() {
         String number = numberInput.getText().toString().trim();
         if (number.isEmpty()) {
             Toast.makeText(this, "Введите номер телефона", Toast.LENGTH_SHORT).show();
             return;
         }
+        pendingNumber = number;
         if (checkSelfPermission(Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            requestPhonePermissions();
+            requestPermissions(new String[]{Manifest.permission.CALL_PHONE}, REQUEST_CALL_PERMISSION);
             return;
         }
+        continueCallFlow(number);
+    }
 
+    private void continueCallFlow(String number) {
+        if (!isDefaultDialer() && requestDialerRole(true)) return;
+        pendingNumber = null;
+        executeCall(number);
+    }
+
+    private void executeCall(String number) {
         saveRecent(number);
         Uri uri = Uri.fromParts("tel", number, null);
         try {
-            TelecomManager telecom = (TelecomManager) getSystemService(TELECOM_SERVICE);
-            if (telecom != null) {
-                telecom.placeCall(uri, new Bundle());
-            } else {
-                startActivity(new Intent(Intent.ACTION_CALL, uri));
+            if (isDefaultDialer()) {
+                TelecomManager telecom = (TelecomManager) getSystemService(TELECOM_SERVICE);
+                if (telecom != null) {
+                    telecom.placeCall(uri, new Bundle());
+                    return;
+                }
             }
-        } catch (SecurityException ex) {
-            Toast.makeText(this, "Разрешите приложению совершать звонки", Toast.LENGTH_LONG).show();
-            requestPhonePermissions();
-        } catch (Exception ex) {
-            startActivity(new Intent(Intent.ACTION_DIAL, uri));
+            startActivity(new Intent(Intent.ACTION_CALL, uri));
+        } catch (SecurityException error) {
+            Toast.makeText(this, "Android запретил прямой звонок — открываю штатный набор номера", Toast.LENGTH_LONG).show();
+            openSystemDialer(number);
+        } catch (Exception error) {
+            openSystemDialer(number);
         }
     }
 
-    private void requestPhonePermissions() {
-        List<String> missing = new ArrayList<>();
-        for (String permission : Arrays.asList(
-                Manifest.permission.CALL_PHONE,
-                Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.ANSWER_PHONE_CALLS)) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-                missing.add(permission);
-            }
-        }
-        if (!missing.isEmpty()) {
-            requestPermissions(missing.toArray(new String[0]), REQUEST_PHONE_PERMISSIONS);
+    private void openSystemDialer(String number) {
+        try {
+            startActivity(new Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", number, null)));
+        } catch (Exception ignored) {
+            Toast.makeText(this, "На устройстве не найдено приложение для звонков", Toast.LENGTH_LONG).show();
         }
     }
 
-    private void requestDialerRole() {
+    private boolean requestDialerRole(boolean fromCall) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                RoleManager roleManager = (RoleManager) getSystemService(ROLE_SERVICE);
-                if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_DIALER)
-                        && !roleManager.isRoleHeld(RoleManager.ROLE_DIALER)) {
-                    startActivityForResult(roleManager.createRequestRoleIntent(RoleManager.ROLE_DIALER),
+                RoleManager manager = (RoleManager) getSystemService(ROLE_SERVICE);
+                if (manager != null && manager.isRoleAvailable(RoleManager.ROLE_DIALER)
+                        && !manager.isRoleHeld(RoleManager.ROLE_DIALER)) {
+                    startActivityForResult(manager.createRequestRoleIntent(RoleManager.ROLE_DIALER),
                             REQUEST_DIALER_ROLE);
+                    return true;
                 }
             } else {
                 TelecomManager telecom = (TelecomManager) getSystemService(TELECOM_SERVICE);
@@ -309,22 +365,50 @@ public class MainActivity extends Activity {
                     intent.putExtra(TelecomManager.EXTRA_CHANGE_DEFAULT_DIALER_PACKAGE_NAME,
                             getPackageName());
                     startActivityForResult(intent, REQUEST_DIALER_ROLE);
+                    return true;
                 }
             }
         } catch (Exception ignored) {
-            Toast.makeText(this,
-                    "Назначьте KASYANOV PHONE приложением «Телефон» в настройках Android",
+            if (!fromCall) Toast.makeText(this,
+                    "Откройте Настройки → Приложения → Приложения по умолчанию → Телефон",
                     Toast.LENGTH_LONG).show();
+        }
+        if (!fromCall) refreshRoleStatus();
+        return false;
+    }
+
+    private boolean isDefaultDialer() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                RoleManager manager = (RoleManager) getSystemService(ROLE_SERVICE);
+                return manager != null && manager.isRoleHeld(RoleManager.ROLE_DIALER);
+            }
+            TelecomManager telecom = (TelecomManager) getSystemService(TELECOM_SERVICE);
+            return telecom != null && getPackageName().equals(telecom.getDefaultDialerPackage());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void refreshRoleStatus() {
+        if (roleStatus == null) return;
+        if (isDefaultDialer()) {
+            roleStatus.setText("Фирменный экран звонка включён");
+            roleStatus.setTextColor(accent);
+        } else {
+            roleStatus.setText("Включить фирменный экран звонка");
+            roleStatus.setTextColor(Color.WHITE);
         }
     }
 
     private void handleDialIntent(Intent intent) {
-        if (intent != null && Intent.ACTION_DIAL.equals(intent.getAction()) && intent.getData() != null) {
-            String number = intent.getData().getSchemeSpecificPart();
-            if (numberInput != null && number != null) {
-                numberInput.setText(number);
-                numberInput.setSelection(number.length());
-            }
+        if (intent == null || !Intent.ACTION_DIAL.equals(intent.getAction())) return;
+        Uri data = intent.getData();
+        if (data == null) return;
+        String number = data.getSchemeSpecificPart();
+        if (number != null && numberInput != null) {
+            numberInput.setText(number);
+            numberInput.setSelection(number.length());
         }
     }
 
@@ -372,6 +456,12 @@ public class MainActivity extends Activity {
         }
     }
 
+    private LinearLayout.LayoutParams wrap() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT);
+    }
+
     private TextView text(String value, int sizeSp, int color, int style) {
         TextView view = new TextView(this);
         view.setText(value);
@@ -388,10 +478,6 @@ public class MainActivity extends Activity {
         drawable.setCornerRadius(dp(radiusDp));
         if (strokeDp > 0) drawable.setStroke(dp(strokeDp), strokeColor);
         return drawable;
-    }
-
-    private GradientDrawable rippleLike(int color, int radiusDp) {
-        return rounded(color, radiusDp, 1, Color.rgb(45, 50, 63));
     }
 
     private int dp(int value) {
